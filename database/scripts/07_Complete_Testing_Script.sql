@@ -1,9 +1,3 @@
--- =====================================================
--- PHASE VI: COMPREHENSIVE TESTING SCRIPT
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- File: database/scripts/07_phase6_tests.sql
--- =====================================================
 
 SET SERVEROUTPUT ON SIZE UNLIMITED;
 SET LINESIZE 200;

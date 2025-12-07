@@ -1,9 +1,3 @@
--- =====================================================
--- PHASE VI: PACKAGES SCRIPT
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- File: database/scripts/05_packages.sql
--- =====================================================
 
 SET SERVEROUTPUT ON;
 

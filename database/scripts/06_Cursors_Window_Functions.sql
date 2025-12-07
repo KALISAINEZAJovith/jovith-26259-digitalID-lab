@@ -1,9 +1,3 @@
--- =====================================================
--- PHASE VI: CURSORS & WINDOW FUNCTIONS SCRIPT
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- File: database/scripts/06_cursors_window_functions.sql
--- =====================================================
 
 SET SERVEROUTPUT ON;
 
