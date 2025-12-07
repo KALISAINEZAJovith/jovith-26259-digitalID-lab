@@ -122,8 +122,8 @@ ALTER SYSTEM SET sga_target = 2G SCOPE=SPFILE;
 ALTER SYSTEM SET pga_aggregate_target = 1G SCOPE=SPFILE;
 
 -- For smaller systems (4GB RAM), use these instead:
--- ALTER SYSTEM SET sga_target = 1G SCOPE=SPFILE;
--- ALTER SYSTEM SET pga_aggregate_target = 512M SCOPE=SPFILE;
+ALTER SYSTEM SET sga_target = 1G SCOPE=SPFILE;
+ALTER SYSTEM SET pga_aggregate_target = 512M SCOPE=SPFILE;
 
 -- =====================================================
 -- ARCHIVE LOG CONFIGURATION

@@ -21,15 +21,17 @@ CREATE TABLE citizens (
     phone_number        VARCHAR2(15) NOT NULL,
     address             VARCHAR2(200),
     registration_date   TIMESTAMP DEFAULT SYSTIMESTAMP,
-    status              VARCHAR2(20) DEFAULT 'ACTIVE' 
+    status              VARCHAR2(20) DEFAULT 'ACTIVE'
                         CHECK (status IN ('ACTIVE','SUSPENDED','INACTIVE')),
-    created_by          VARCHAR2(50) DEFAULT USER,
+    created_by          VARCHAR2(50)
+                        DEFAULT SYS_CONTEXT('USERENV','SESSION_USER'),
     created_date        TIMESTAMP DEFAULT SYSTIMESTAMP,
     modified_by         VARCHAR2(50),
     modified_date       TIMESTAMP,
-    CONSTRAINT chk_citizen_age CHECK (MONTHS_BETWEEN(SYSDATE, date_of_birth) / 12 >= 18),
-    CONSTRAINT chk_citizen_email CHECK (REGEXP_LIKE(email, '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$'))
+    CONSTRAINT chk_citizen_email CHECK 
+    (REGEXP_LIKE(email, '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'))
 ) TABLESPACE digitalid_data;
+
 
 -- Create index for performance
 CREATE INDEX idx_citizen_national_id ON citizens(national_id) TABLESPACE digitalid_indexes;
