@@ -1,170 +1,376 @@
 -- =====================================================
--- File: analytics_queries.sql
--- Purpose: Analytical queries and KPIs for the Digital ID system.
--- Includes monthly trends, consent metrics, request/approval KPIs,
--- entity rankings, alert & violation summaries suitable for dashboards.
--- Usage: Provide bind variables where shown (e.g. :months_back).
--- Oracle-specific functions (TRUNC, TO_CHAR, NUMTODSINTERVAL) are used.
+-- QUERY 1: EXECUTIVE KPI SUMMARY
+-- Purpose: Top-level metrics for executive dashboard
 -- =====================================================
+SELECT 
+    (SELECT COUNT(*) FROM citizens WHERE status = 'ACTIVE') AS active_citizens,
+    (SELECT COUNT(*) FROM access_requests WHERE TRUNC(request_date) = TRUNC(SYSDATE)) AS requests_today,
+    (SELECT COUNT(*) FROM access_requests WHERE request_status = 'PENDING') AS pending_requests,
+    (SELECT COUNT(*) FROM violations WHERE status = 'INVESTIGATING') AS active_violations,
+    (SELECT ROUND(AVG(risk_score), 3) FROM access_requests WHERE request_date >= SYSDATE - 7) AS avg_risk_7days,
+    (SELECT COUNT(*) FROM alerts WHERE status = 'NEW' AND severity IN ('HIGH','CRITICAL')) AS critical_alerts
+FROM dual;
 
--- 1) Monthly new citizen registrations (last N months)
-SELECT TO_CHAR(TRUNC(registration_date,'MM'),'YYYY-MM') AS month,
-			 COUNT(*) AS new_citizens
-FROM citizens
-WHERE registration_date >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,12))
-GROUP BY TRUNC(registration_date,'MM')
-ORDER BY TRUNC(registration_date,'MM');
-
--- 2) Monthly digital ID issuances and active IDs trend
-SELECT TO_CHAR(TRUNC(issue_date,'MM'),'YYYY-MM') AS month,
-	   SUM(CASE WHEN issue_date IS NOT NULL THEN 1 ELSE 0 END) AS issued_ids,
-	   SUM(CASE WHEN is_active='Y' THEN 1 ELSE 0 END) AS active_ids
-FROM digital_ids
-WHERE issue_date >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,12))
-GROUP BY TRUNC(issue_date,'MM')
-ORDER BY TRUNC(issue_date,'MM');
-
--- 3) Percentage of citizens with at least one active digital ID
-SELECT COUNT(DISTINCT d.citizen_id) AS citizens_with_active_id,
-			 (COUNT(DISTINCT d.citizen_id) / NULLIF((SELECT COUNT(*) FROM citizens),0)) * 100 AS pct_citizens_with_active_id
-FROM digital_ids d
-WHERE d.is_active='Y';
-
--- 4) Consent grant vs revoke trend by category (last N months)
-SELECT TO_CHAR(TRUNC(NVL(c.granted_date, c.revoked_date),'MM'),'YYYY-MM') AS month,
-			 dc.category_name,
-			 SUM(CASE WHEN c.consent_status='GRANTED' THEN 1 ELSE 0 END) AS grants,
-			 SUM(CASE WHEN c.consent_status='REVOKED' THEN 1 ELSE 0 END) AS revocations
-FROM consent_records c
-LEFT JOIN data_categories dc ON c.data_category_id = dc.category_id
-WHERE NVL(c.granted_date, c.revoked_date) >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,6))
-GROUP BY TRUNC(NVL(c.granted_date, c.revoked_date),'MM'), dc.category_name
-ORDER BY TRUNC(NVL(c.granted_date, c.revoked_date),'MM'), dc.category_name;
-
--- 5) Request volume and approval rate per month
-SELECT TO_CHAR(TRUNC(request_date,'MM'),'YYYY-MM') AS month,
-			 COUNT(*) AS total_requests,
-			 SUM(CASE WHEN request_status='APPROVED' THEN 1 ELSE 0 END) AS approved_requests,
-			 ROUND(100 * SUM(CASE WHEN request_status='APPROVED' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0),2) AS approval_rate_pct
+-- =====================================================
+-- QUERY 2: DAILY REQUEST TRENDS (LAST 30 DAYS)
+-- Purpose: Volume analysis for trend charts
+-- =====================================================
+SELECT 
+    TRUNC(request_date) AS request_day,
+    COUNT(*) AS total_requests,
+    SUM(CASE WHEN request_status = 'APPROVED' THEN 1 ELSE 0 END) AS approved,
+    SUM(CASE WHEN request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied,
+    SUM(CASE WHEN request_status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
+    ROUND(AVG(risk_score), 3) AS avg_risk_score,
+    MAX(risk_score) AS max_risk_score
 FROM access_requests
-WHERE request_date >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,12))
-GROUP BY TRUNC(request_date,'MM')
-ORDER BY TRUNC(request_date,'MM');
+WHERE request_date >= SYSDATE - 30
+GROUP BY TRUNC(request_date)
+ORDER BY request_day DESC;
 
--- 6) Average and median approval time (minutes) overall and by entity
--- Average approval minutes
-SELECT 'OVERALL' AS scope,
-			 AVG((CAST(approval_date AS DATE) - CAST(request_date AS DATE)) * 24 * 60) AS avg_approval_minutes
+-- =====================================================
+-- QUERY 3: RISK DISTRIBUTION ANALYSIS
+-- Purpose: Risk categorization for pie charts
+-- =====================================================
+SELECT 
+    CASE 
+        WHEN risk_score >= 0.7 THEN 'HIGH RISK'
+        WHEN risk_score >= 0.4 THEN 'MODERATE RISK'
+        ELSE 'LOW RISK'
+    END AS risk_category,
+    COUNT(*) AS request_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage,
+    ROUND(AVG(risk_score), 3) AS avg_risk_in_category
 FROM access_requests
-WHERE request_status='APPROVED'
-	AND approval_date IS NOT NULL
-	AND request_date >= SYSDATE - NVL(:days_back,90);
+WHERE request_date >= SYSDATE - 30
+GROUP BY 
+    CASE 
+        WHEN risk_score >= 0.7 THEN 'HIGH RISK'
+        WHEN risk_score >= 0.4 THEN 'MODERATE RISK'
+        ELSE 'LOW RISK'
+    END
+ORDER BY 
+    CASE 
+        WHEN risk_score >= 0.7 THEN 1
+        WHEN risk_score >= 0.4 THEN 2
+        ELSE 3
+    END;
 
--- Average approval minutes by entity (top 20 slowest)
-SELECT ae.entity_id,
-			 ae.entity_name,
-			 COUNT(r.request_id) AS approved_count,
-			 AVG((CAST(r.approval_date AS DATE) - CAST(r.request_date AS DATE)) * 24 * 60) AS avg_approval_minutes
-FROM access_requests r
-LEFT JOIN authorized_entities ae ON r.entity_id = ae.entity_id
-WHERE r.request_status='APPROVED'
-	AND r.approval_date IS NOT NULL
-	AND r.request_date >= SYSDATE - NVL(:days_back,90)
-GROUP BY ae.entity_id, ae.entity_name
-HAVING COUNT(r.request_id) > 5
-ORDER BY avg_approval_minutes DESC NULLS LAST
-FETCH FIRST 20 ROWS ONLY;
-
--- 7) Top requested data categories (by requests count)
-SELECT data_category,
-			 COUNT(*) AS requests_count
-FROM access_requests
-GROUP BY data_category
-ORDER BY requests_count DESC
-FETCH FIRST 20 ROWS ONLY;
-
--- 8) Entity ranking by request volume and approval rate
-SELECT ae.entity_id,
-			 ae.entity_name,
-			 COUNT(r.request_id) AS total_requests,
-			 SUM(CASE WHEN r.request_status='APPROVED' THEN 1 ELSE 0 END) AS approved_requests,
-			 ROUND(100 * SUM(CASE WHEN r.request_status='APPROVED' THEN 1 ELSE 0 END) / NULLIF(COUNT(r.request_id),0),2) AS approval_rate_pct
+-- =====================================================
+-- QUERY 4: TOP 10 ENTITIES BY REQUEST VOLUME
+-- Purpose: Entity performance ranking
+-- =====================================================
+SELECT 
+    ae.entity_id,
+    ae.entity_name,
+    ae.entity_type,
+    COUNT(ar.request_id) AS total_requests,
+    SUM(CASE WHEN ar.request_status = 'APPROVED' THEN 1 ELSE 0 END) AS approved_count,
+    SUM(CASE WHEN ar.request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied_count,
+    ROUND(AVG(ar.risk_score), 3) AS avg_risk_score,
+    ROUND(SUM(CASE WHEN ar.request_status = 'APPROVED' THEN 1 ELSE 0 END) * 100.0 / 
+          COUNT(ar.request_id), 2) AS approval_rate
 FROM authorized_entities ae
-LEFT JOIN access_requests r ON ae.entity_id = r.entity_id
-GROUP BY ae.entity_id, ae.entity_name
+JOIN access_requests ar ON ae.entity_id = ar.entity_id
+WHERE ar.request_date >= SYSDATE - 30
+GROUP BY ae.entity_id, ae.entity_name, ae.entity_type
 ORDER BY total_requests DESC
-FETCH FIRST 50 ROWS ONLY;
+FETCH FIRST 10 ROWS ONLY;
 
--- 9) Alerts by severity over time (last N months)
-SELECT TO_CHAR(TRUNC(alert_date,'MM'),'YYYY-MM') AS month,
-			 severity,
-			 COUNT(*) AS alerts_count
-FROM alerts
-WHERE alert_date >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,12))
-GROUP BY TRUNC(alert_date,'MM'), severity
-ORDER BY TRUNC(alert_date,'MM') DESC, severity;
+-- =====================================================
+-- QUERY 5: HIGH-RISK REQUESTS REQUIRING REVIEW
+-- Purpose: Security dashboard - immediate action items
+-- =====================================================
+SELECT 
+    ar.request_id,
+    ae.entity_name,
+    ae.entity_type,
+    c.first_name || ' ' || c.last_name AS citizen_name,
+    ar.data_category,
+    ar.purpose,
+    ROUND(ar.risk_score, 3) AS risk_score,
+    ar.request_date,
+    CASE 
+        WHEN ar.risk_score >= 0.9 THEN 'CRITICAL'
+        WHEN ar.risk_score >= 0.7 THEN 'HIGH'
+        ELSE 'MODERATE'
+    END AS risk_level
+FROM access_requests ar
+JOIN authorized_entities ae ON ar.entity_id = ae.entity_id
+JOIN digital_ids di ON ar.digital_id = di.digital_id
+JOIN citizens c ON di.citizen_id = c.citizen_id
+WHERE ar.request_status = 'PENDING'
+  AND ar.risk_score >= 0.7
+ORDER BY ar.risk_score DESC, ar.request_date;
 
--- 10) Violations by type and monthly penalties (last N months)
-SELECT TO_CHAR(TRUNC(violation_date,'MM'),'YYYY-MM') AS month,
-			 violation_type,
-			 COUNT(*) AS violations_count,
-			 SUM(NVL(penalty_amount,0)) AS total_penalties
-FROM violations
-WHERE violation_date >= ADD_MONTHS(TRUNC(SYSDATE,'MM'), -NVL(:months_back,12))
-GROUP BY TRUNC(violation_date,'MM'), violation_type
-ORDER BY TRUNC(violation_date,'MM') DESC, violations_count DESC;
-
--- 11) Daily request volume and 7-day moving average (last N days)
-WITH daily AS (
-	SELECT TRUNC(request_date) AS day,
-				 COUNT(*) AS requests
-	FROM access_requests
-	WHERE request_date >= TRUNC(SYSDATE) - NVL(:days_back,30)
-	GROUP BY TRUNC(request_date)
+-- =====================================================
+-- QUERY 6: CONSENT COVERAGE ANALYSIS
+-- Purpose: Compliance monitoring - consent status
+-- =====================================================
+WITH citizen_consent_summary AS (
+    SELECT 
+        c.citizen_id,
+        COUNT(DISTINCT cr.consent_id) AS total_consents,
+        SUM(CASE WHEN cr.consent_status = 'GRANTED' THEN 1 ELSE 0 END) AS granted_consents,
+        SUM(CASE WHEN cr.consent_status = 'REVOKED' THEN 1 ELSE 0 END) AS revoked_consents,
+        SUM(CASE WHEN cr.consent_status = 'EXPIRED' THEN 1 ELSE 0 END) AS expired_consents
+    FROM citizens c
+    LEFT JOIN consent_records cr ON c.citizen_id = cr.citizen_id
+    WHERE c.status = 'ACTIVE'
+    GROUP BY c.citizen_id
 )
-SELECT d.day,
-			 d.requests,
-			 ROUND(AVG(d.requests) OVER (ORDER BY d.day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW),2) AS ma_7
-FROM daily d
-ORDER BY d.day;
+SELECT 
+    COUNT(*) AS total_active_citizens,
+    SUM(CASE WHEN total_consents > 0 THEN 1 ELSE 0 END) AS citizens_with_consents,
+    ROUND(SUM(CASE WHEN total_consents > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS consent_coverage_pct,
+    ROUND(AVG(granted_consents), 2) AS avg_granted_per_citizen,
+    SUM(granted_consents) AS total_granted_consents,
+    SUM(revoked_consents) AS total_revoked_consents,
+    SUM(expired_consents) AS total_expired_consents
+FROM citizen_consent_summary;
 
--- 12) Percentage of requests that are high-risk by entity
-SELECT ae.entity_id,
-			 ae.entity_name,
-			 COUNT(r.request_id) AS total_requests,
-			 SUM(CASE WHEN NVL(r.risk_score,0) > NVL(:risk_threshold,0.7) THEN 1 ELSE 0 END) AS high_risk_count,
-			 ROUND(100 * SUM(CASE WHEN NVL(r.risk_score,0) > NVL(:risk_threshold,0.7) THEN 1 ELSE 0 END) / NULLIF(COUNT(r.request_id),0),2) AS high_risk_pct
-FROM access_requests r
-LEFT JOIN authorized_entities ae ON r.entity_id = ae.entity_id
-WHERE r.request_date >= SYSDATE - NVL(:days_back,90)
-GROUP BY ae.entity_id, ae.entity_name
-ORDER BY high_risk_pct DESC NULLS LAST
-FETCH FIRST 50 ROWS ONLY;
+-- =====================================================
+-- QUERY 7: VIOLATION TRENDS BY TYPE
+-- Purpose: Compliance dashboard - violation analysis
+-- =====================================================
+SELECT 
+    TRUNC(violation_date, 'MM') AS violation_month,
+    violation_type,
+    COUNT(*) AS violation_count,
+    SUM(penalty_amount) AS total_penalties,
+    ROUND(AVG(penalty_amount), 2) AS avg_penalty,
+    COUNT(DISTINCT entity_id) AS unique_violators
+FROM violations
+WHERE violation_date >= ADD_MONTHS(SYSDATE, -12)
+GROUP BY TRUNC(violation_date, 'MM'), violation_type
+ORDER BY violation_month DESC, violation_count DESC;
 
--- 13) Cohort-like measure: how many citizens receive a digital ID within X months of registration
-SELECT cohort_month,
-			 COUNT(*) AS total_registered,
-			 SUM(CASE WHEN months_to_first_id <= NVL(:months_threshold,3) THEN 1 ELSE 0 END) AS got_id_within_threshold,
-			 ROUND(100 * SUM(CASE WHEN months_to_first_id <= NVL(:months_threshold,3) THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0),2) AS pct_got_id
-FROM (
-	SELECT c.citizen_id,
-				 TO_CHAR(TRUNC(c.registration_date,'MM'),'YYYY-MM') AS cohort_month,
-				 MIN(MONTHS_BETWEEN(d.issue_date, c.registration_date)) AS months_to_first_id
-	FROM citizens c
-	LEFT JOIN digital_ids d ON c.citizen_id = d.citizen_id
-	GROUP BY c.citizen_id, TRUNC(c.registration_date,'MM')
-) t
-GROUP BY cohort_month
-ORDER BY cohort_month DESC;
+-- =====================================================
+-- QUERY 8: ENTITY AUTHORIZATION EXPIRY TRACKING
+-- Purpose: Compliance dashboard - proactive monitoring
+-- =====================================================
+SELECT 
+    entity_id,
+    entity_name,
+    entity_type,
+    authorization_level,
+    expiry_date,
+    expiry_date - SYSDATE AS days_until_expiry,
+    CASE 
+        WHEN expiry_date - SYSDATE < 0 THEN 'EXPIRED'
+        WHEN expiry_date - SYSDATE <= 7 THEN 'URGENT'
+        WHEN expiry_date - SYSDATE <= 30 THEN 'WARNING'
+        ELSE 'OK'
+    END AS expiry_status,
+    contact_person,
+    contact_email
+FROM authorized_entities
+WHERE status = 'ACTIVE'
+  AND expiry_date IS NOT NULL
+ORDER BY days_until_expiry;
 
--- 14) Quick KPI single-row snapshot
-SELECT (SELECT COUNT(*) FROM citizens)                                         AS total_citizens,
-			 (SELECT COUNT(*) FROM digital_ids WHERE is_active='Y')                  AS active_digital_ids,
-			 (SELECT COUNT(*) FROM access_requests WHERE request_status='PENDING')    AS pending_requests,
-			 (SELECT ROUND(100 * SUM(CASE WHEN request_status='APPROVED' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0),2)
-					 FROM access_requests
-					 WHERE request_date >= TRUNC(SYSDATE) - 30)                           AS approval_rate_last_30d,
-			 (SELECT COUNT(*) FROM alerts WHERE alert_date >= TRUNC(SYSDATE) - 30)   AS alerts_last_30d;
+-- =====================================================
+-- QUERY 9: DATA CATEGORY ACCESS FREQUENCY HEATMAP
+-- Purpose: Identify over-accessed data categories
+-- =====================================================
+SELECT 
+    ae.entity_type,
+    ar.data_category,
+    COUNT(*) AS access_count,
+    ROUND(AVG(ar.risk_score), 3) AS avg_risk,
+    SUM(CASE WHEN ar.request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied_count
+FROM access_requests ar
+JOIN authorized_entities ae ON ar.entity_id = ae.entity_id
+WHERE ar.request_date >= SYSDATE - 30
+GROUP BY ae.entity_type, ar.data_category
+ORDER BY ae.entity_type, access_count DESC;
 
--- End of file
+-- =====================================================
+-- QUERY 10: HOURLY ACCESS PATTERN ANALYSIS
+-- Purpose: Capacity planning - identify peak hours
+-- =====================================================
+SELECT 
+    EXTRACT(HOUR FROM request_date) AS hour_of_day,
+    COUNT(*) AS total_requests,
+    ROUND(AVG(risk_score), 3) AS avg_risk_score,
+    SUM(CASE WHEN request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied_requests,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_of_total
+FROM access_requests
+WHERE request_date >= SYSDATE - 7
+GROUP BY EXTRACT(HOUR FROM request_date)
+ORDER BY hour_of_day;
 
+-- =====================================================
+-- QUERY 11: CITIZEN ACCESS HISTORY DETAILED VIEW
+-- Purpose: Transparency report for individual citizen
+-- =====================================================
+CREATE OR REPLACE VIEW v_citizen_access_history AS
+SELECT 
+    c.citizen_id,
+    c.first_name || ' ' || c.last_name AS citizen_name,
+    c.national_id,
+    ae.entity_name,
+    ae.entity_type,
+    ar.data_category,
+    ar.purpose,
+    ar.request_status,
+    ar.risk_score,
+    ar.request_date,
+    ar.approval_date,
+    ar.approved_by,
+    al.action_result,
+    al.denial_reason,
+    CASE 
+        WHEN ar.request_status = 'DENIED' THEN 'ACCESS DENIED'
+        WHEN ar.request_status = 'APPROVED' THEN 'ACCESS GRANTED'
+        ELSE 'PENDING REVIEW'
+    END AS access_outcome
+FROM citizens c
+JOIN digital_ids di ON c.citizen_id = di.citizen_id
+JOIN access_requests ar ON di.digital_id = ar.digital_id
+JOIN authorized_entities ae ON ar.entity_id = ae.entity_id
+LEFT JOIN access_logs al ON ar.request_id = al.request_id
+ORDER BY ar.request_date DESC;
+
+-- =====================================================
+-- QUERY 12: MONTHLY COMPLIANCE SCORECARD
+-- Purpose: Executive report - overall health metrics
+-- =====================================================
+WITH monthly_metrics AS (
+    SELECT 
+        TO_CHAR(SYSDATE, 'YYYY-MM') AS report_month,
+        (SELECT COUNT(*) FROM citizens WHERE status = 'ACTIVE') AS active_citizens,
+        (SELECT COUNT(*) FROM access_requests 
+         WHERE TRUNC(request_date, 'MM') = TRUNC(SYSDATE, 'MM')) AS total_requests,
+        (SELECT COUNT(*) FROM access_requests 
+         WHERE TRUNC(request_date, 'MM') = TRUNC(SYSDATE, 'MM') 
+         AND request_status = 'APPROVED') AS approved_requests,
+        (SELECT COUNT(*) FROM violations 
+         WHERE TRUNC(violation_date, 'MM') = TRUNC(SYSDATE, 'MM')) AS total_violations,
+        (SELECT COUNT(*) FROM consent_records 
+         WHERE consent_status = 'GRANTED') AS active_consents,
+        (SELECT COUNT(*) FROM alerts 
+         WHERE TRUNC(alert_date, 'MM') = TRUNC(SYSDATE, 'MM') 
+         AND severity IN ('HIGH','CRITICAL')) AS critical_alerts
+    FROM dual
+)
+SELECT 
+    report_month,
+    active_citizens,
+    total_requests,
+    approved_requests,
+    ROUND(approved_requests * 100.0 / NULLIF(total_requests, 0), 2) AS approval_rate,
+    total_violations,
+    active_consents,
+    ROUND(active_consents * 100.0 / NULLIF(active_citizens, 0), 2) AS consent_coverage,
+    critical_alerts,
+    CASE 
+        WHEN total_violations = 0 AND approval_rate > 70 AND consent_coverage > 80 THEN 'EXCELLENT'
+        WHEN total_violations <= 2 AND approval_rate > 60 AND consent_coverage > 70 THEN 'GOOD'
+        WHEN total_violations <= 5 THEN 'NEEDS IMPROVEMENT'
+        ELSE 'CRITICAL'
+    END AS overall_health_status
+FROM monthly_metrics;
+
+-- =====================================================
+-- QUERY 13: ENTITY RISK MATRIX (SCATTER PLOT DATA)
+-- Purpose: Identify problematic entities
+-- =====================================================
+SELECT 
+    ae.entity_id,
+    ae.entity_name,
+    ae.entity_type,
+    COUNT(ar.request_id) AS total_requests,
+    ROUND(AVG(ar.risk_score), 3) AS avg_risk_score,
+    COUNT(v.violation_id) AS violation_count,
+    SUM(CASE WHEN ar.request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied_count,
+    CASE 
+        WHEN COUNT(ar.request_id) > 100 AND AVG(ar.risk_score) > 0.5 THEN 'HIGH RISK - HIGH VOLUME'
+        WHEN COUNT(ar.request_id) > 100 THEN 'HIGH VOLUME - LOW RISK'
+        WHEN AVG(ar.risk_score) > 0.5 THEN 'LOW VOLUME - HIGH RISK'
+        ELSE 'LOW RISK - LOW VOLUME'
+    END AS risk_category
+FROM authorized_entities ae
+JOIN access_requests ar ON ae.entity_id = ar.entity_id
+LEFT JOIN violations v ON ae.entity_id = v.entity_id
+WHERE ar.request_date >= SYSDATE - 90
+GROUP BY ae.entity_id, ae.entity_name, ae.entity_type
+HAVING COUNT(ar.request_id) > 10
+ORDER BY avg_risk_score DESC, total_requests DESC;
+
+-- =====================================================
+-- QUERY 14: ALERT RESPONSE TIME ANALYSIS
+-- Purpose: Measure DPO efficiency
+-- =====================================================
+SELECT 
+    alert_type,
+    severity,
+    COUNT(*) AS total_alerts,
+    SUM(CASE WHEN status IN ('RESOLVED','FALSE_POSITIVE') THEN 1 ELSE 0 END) AS resolved_alerts,
+    ROUND(AVG(CASE 
+        WHEN reviewed_date IS NOT NULL 
+        THEN (reviewed_date - alert_date) * 24 
+        ELSE NULL 
+    END), 2) AS avg_response_hours,
+    MIN(CASE 
+        WHEN reviewed_date IS NOT NULL 
+        THEN (reviewed_date - alert_date) * 24 
+        ELSE NULL 
+    END) AS min_response_hours,
+    MAX(CASE 
+        WHEN reviewed_date IS NOT NULL 
+        THEN (reviewed_date - alert_date) * 24 
+        ELSE NULL 
+    END) AS max_response_hours
+FROM alerts
+WHERE alert_date >= SYSDATE - 30
+GROUP BY alert_type, severity
+ORDER BY severity DESC, avg_response_hours DESC;
+
+-- =====================================================
+-- QUERY 15: PREDICTIVE - CONSENT EXPIRY FORECAST
+-- Purpose: Proactive consent renewal notifications
+-- =====================================================
+SELECT 
+    TRUNC(expiry_date, 'MM') AS expiry_month,
+    COUNT(*) AS consents_expiring,
+    COUNT(DISTINCT citizen_id) AS affected_citizens,
+    LISTAGG(DISTINCT data_category_id, ', ') WITHIN GROUP (ORDER BY data_category_id) AS categories
+FROM consent_records
+WHERE consent_status = 'GRANTED'
+  AND expiry_date BETWEEN SYSDATE AND SYSDATE + 90
+GROUP BY TRUNC(expiry_date, 'MM')
+ORDER BY expiry_month;
+
+-- =====================================================
+-- MATERIALIZED VIEW: DAILY AGGREGATES FOR PERFORMANCE
+-- Purpose: Pre-calculated metrics for dashboard speed
+-- =====================================================
+CREATE MATERIALIZED VIEW mv_daily_access_metrics
+BUILD IMMEDIATE
+REFRESH COMPLETE ON DEMAND
+AS
+SELECT 
+    TRUNC(request_date) AS request_day,
+    entity_id,
+    COUNT(*) AS total_requests,
+    SUM(CASE WHEN request_status = 'APPROVED' THEN 1 ELSE 0 END) AS approved,
+    SUM(CASE WHEN request_status = 'DENIED' THEN 1 ELSE 0 END) AS denied,
+    SUM(CASE WHEN request_status = 'PENDING' THEN 1 ELSE 0 END) AS pending,
+    ROUND(AVG(risk_score), 3) AS avg_risk_score,
+    MAX(risk_score) AS max_risk_score,
+    MIN(risk_score) AS min_risk_score
+FROM access_requests
+GROUP BY TRUNC(request_date), entity_id;
+
+-- Create index for fast queries
+CREATE INDEX idx_mv_daily_access ON mv_daily_access_metrics(request_day, entity_id);
+
+-- Refresh the materialized view (run daily via scheduler)
+-- EXEC DBMS_MVIEW.REFRESH('MV_DAILY_ACCESS_METRICS', 'C');
+
+PROMPT
+PROMPT ===== ANALYTICS QUERIES COMPLETED =====
+PROMPT Total Queries: 15 analytical queries + 1 materialized view
+PROMPT Purpose: Executive dashboards, security monitoring, compliance reporting
+PROMPT
