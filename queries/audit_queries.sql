@@ -1,9 +1,4 @@
--- =====================================================
--- AUDIT QUERIES
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- File: queries/audit_queries.sql
--- =====================================================
+
 
 SET SERVEROUTPUT ON;
 SET LINESIZE 200;

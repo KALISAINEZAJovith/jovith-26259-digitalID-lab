@@ -1,9 +1,3 @@
--- =====================================================
--- DATA RETRIEVAL QUERIES
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- File: queries/data_retrieval.sql
--- =====================================================
 
 SET LINESIZE 200;
 SET PAGESIZE 100;

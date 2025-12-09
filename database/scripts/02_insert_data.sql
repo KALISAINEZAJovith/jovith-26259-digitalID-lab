@@ -1,9 +1,3 @@
--- =====================================================
--- PHASE V: DATA INSERTION SCRIPT (PART 1 OF 2)
--- Project: Digital ID Data Privacy and Access Monitoring System
--- Student: KALISA INEZA JOVITH (26259)
--- This script inserts 100-500+ realistic rows per table
--- =====================================================
 
 SET SERVEROUTPUT ON;
 SET DEFINE OFF;

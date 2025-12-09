@@ -76,6 +76,3 @@ WHERE action_result='DENIED'
 **Contact / Author**
 - Project owner: `KALISAINEZAJovith`
 - For questions or improvements, open an issue or create a pull request.
-
----
-Generated and updated README for repository usage, setup and analytics guidance.

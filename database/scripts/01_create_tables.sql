@@ -66,8 +66,7 @@ CREATE TABLE digital_ids (
 ) TABLESPACE digitalid_data;
 
 CREATE INDEX idx_digital_citizen ON digital_ids(citizen_id) TABLESPACE digitalid_indexes;
-CREATE UNIQUE INDEX idx_digital_active ON digital_ids(citizen_id, is_active) 
-    WHERE is_active = 'Y' TABLESPACE digitalid_indexes;
+CREATE INDEX idx_digital_active ON digital_ids(citizen_id, is_active) TABLESPACE digitalid_indexes;
 
 COMMENT ON TABLE digital_ids IS 'Stores encrypted digital identity credentials';
 COMMENT ON COLUMN digital_ids.biometric_hash IS 'Encrypted biometric data (fingerprint/facial)';
